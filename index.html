@@ -1,0 +1,1571 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#050505" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Reality Glitch Camera</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --glass: rgba(18, 18, 18, .76);
+      --glass-strong: rgba(18, 18, 18, .92);
+      --line: rgba(255, 255, 255, .18);
+      --muted: rgba(255, 255, 255, .68);
+      --accent: #ffffff;
+      --record: #da1836;
+      --safe-top: max(10px, env(safe-area-inset-top));
+      --safe-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+
+    #stage { position: fixed; inset: 0; background: #050505; }
+    #stage canvas {
+      position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+      touch-action: none; cursor: grab;
+    }
+    #stage canvas:active { cursor: grabbing; }
+    #cameraVideo {
+      position: fixed; left: -12px; top: -12px; width: 2px; height: 2px;
+      opacity: .001; pointer-events: none;
+    }
+
+    button, select, input, .fileLabel, .buttonLink { font: inherit; }
+    button, .fileLabel, .buttonLink, select {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      background: var(--glass);
+      color: #fff;
+      border-radius: 999px;
+      padding: 9px 13px;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 1;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    button, .fileLabel, .buttonLink { touch-action: manipulation; cursor: pointer; }
+    button:active, .fileLabel:active, .buttonLink:active { transform: scale(.975); }
+    button:disabled, select:disabled { opacity: .42; cursor: default; }
+    button.primary, .buttonLink.primary { background: rgba(255,255,255,.94); color: #050505; border-color: transparent; }
+    button.rec { background: var(--record); border-color: rgba(255,255,255,.18); min-width: 78px; }
+    button.active { background: #fff; color: #050505; border-color: #fff; }
+    .buttonLink { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
+    #topbar {
+      position: fixed; z-index: 20; top: var(--safe-top); left: 10px; right: 10px;
+      display: flex; gap: 7px; align-items: center; pointer-events: auto;
+    }
+    #topbar .spacer { flex: 1; }
+    #cameraSelect {
+      max-width: min(42vw, 260px);
+      padding-right: 30px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    #status {
+      position: fixed; z-index: 14;
+      top: calc(var(--safe-top) + 52px); left: 50%; transform: translateX(-50%);
+      max-width: min(92vw, 680px);
+      background: rgba(0,0,0,.58); color: #fff;
+      padding: 8px 12px; border-radius: 12px;
+      font-size: 13px; text-align: center; line-height: 1.3;
+      pointer-events: none;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      transition: opacity .2s ease;
+    }
+
+    #bottomPanel {
+      position: fixed; z-index: 20; bottom: var(--safe-bottom); left: 10px; right: 10px;
+      display: grid; grid-template-columns: auto minmax(130px, 1fr) auto; gap: 9px; align-items: center;
+      pointer-events: auto;
+    }
+    .segmented {
+      display: inline-flex; align-items: center; padding: 3px; gap: 3px;
+      background: var(--glass); border: 1px solid var(--line); border-radius: 999px;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    .segmented button { border: 0; background: transparent; min-height: 36px; padding: 8px 12px; }
+    .segmented button.active { background: #fff; color: #050505; }
+
+    .quickSlider {
+      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px;
+      min-height: 42px; padding: 7px 11px;
+      background: var(--glass); border: 1px solid var(--line); border-radius: 999px;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    .quickSlider label { font-size: 12px; font-weight: 750; color: var(--muted); }
+    .quickSlider output { min-width: 46px; text-align: right; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    input[type="range"] { width: 100%; accent-color: #fff; touch-action: manipulation; }
+
+    #captureButtons { display: flex; gap: 7px; justify-self: end; }
+    #photoBtn { min-width: 54px; }
+
+    #gestureHelp {
+      position: fixed; z-index: 13; left: 50%; transform: translateX(-50%);
+      bottom: calc(var(--safe-bottom) + 61px);
+      background: rgba(0,0,0,.56); color: rgba(255,255,255,.92);
+      padding: 7px 11px; border-radius: 999px; font-size: 12px;
+      white-space: nowrap; pointer-events: none;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    }
+
+    #advancedPanel {
+      position: fixed; z-index: 24;
+      top: calc(var(--safe-top) + 52px); right: 10px;
+      width: min(390px, calc(100vw - 20px)); max-height: calc(100vh - var(--safe-top) - var(--safe-bottom) - 120px);
+      overflow: auto; overscroll-behavior: contain;
+      background: var(--glass-strong); border: 1px solid var(--line); border-radius: 20px;
+      padding: 14px; box-shadow: 0 16px 60px rgba(0,0,0,.42);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      transform-origin: top right; opacity: 0; pointer-events: none; transform: scale(.98) translateY(-4px);
+      transition: opacity .14s ease, transform .14s ease;
+    }
+    #advancedPanel.show { opacity: 1; pointer-events: auto; transform: scale(1) translateY(0); }
+    .panelHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .panelHeader h2 { margin: 0; font-size: 16px; }
+    .panelHeader button { min-height: 34px; padding: 7px 10px; }
+    .section { padding: 12px 0; border-top: 1px solid rgba(255,255,255,.1); }
+    .section:first-of-type { border-top: 0; }
+    .section h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    .controlRow { display: grid; grid-template-columns: 118px 1fr 58px; align-items: center; gap: 9px; min-height: 38px; }
+    .controlRow + .controlRow { margin-top: 7px; }
+    .controlRow label { font-size: 13px; font-weight: 650; }
+    .controlRow output { text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .controlRow select { width: 100%; min-height: 38px; border-radius: 10px; padding: 7px 9px; }
+    .controlRow input[type="number"] {
+      width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 10px;
+      background: rgba(0,0,0,.24); color: #fff; padding: 7px 9px;
+    }
+    .controlRow input[type="color"] { width: 100%; height: 34px; border: 0; background: transparent; padding: 0; }
+    .fullRow { display: grid; grid-template-columns: 1fr; gap: 7px; }
+    .buttonRow { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
+    .buttonRow button { min-height: 38px; padding: 8px 11px; }
+    .toggleRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; }
+    .toggleRow label { font-size: 13px; font-weight: 650; }
+    .switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch span { position: absolute; inset: 0; border-radius: 999px; background: rgba(255,255,255,.16); transition: .18s; border: 1px solid var(--line); }
+    .switch span::before { content: ""; position: absolute; width: 22px; height: 22px; left: 2px; top: 2px; border-radius: 50%; background: #fff; transition: .18s; }
+    .switch input:checked + span { background: rgba(255,255,255,.8); }
+    .switch input:checked + span::before { transform: translateX(20px); background: #050505; }
+    .hint { margin: 8px 0 0; font-size: 11px; line-height: 1.4; color: rgba(255,255,255,.52); }
+
+    #recordBar {
+      display: none; position: fixed; z-index: 40; top: var(--safe-top); left: 50%; transform: translateX(-50%);
+      gap: 12px; align-items: center; background: rgba(0,0,0,.72); padding: 8px 10px 8px 14px;
+      border: 1px solid rgba(255,255,255,.15); border-radius: 999px;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    #timer { font-variant-numeric: tabular-nums; font-weight: 800; min-width: 42px; }
+    body.recording #topbar,
+    body.recording #bottomPanel,
+    body.recording #gestureHelp,
+    body.recording #status,
+    body.recording #advancedPanel { display: none !important; }
+    body.recording #recordBar { display: flex; }
+
+    #startCard {
+      position: fixed; z-index: 60; inset: 0; display: grid; place-items: center;
+      padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+      background: radial-gradient(circle at 50% 35%, #242424, #0b0b0b 62%);
+    }
+    #startCard.hidden { display: none; }
+    #startInner { width: min(620px, 92vw); text-align: center; }
+    #startInner .eyebrow { color: rgba(255,255,255,.5); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; font-size: 11px; margin-bottom: 12px; }
+    #startInner h1 { font-size: clamp(34px, 9vw, 58px); line-height: .94; letter-spacing: -.04em; margin: 0 0 16px; }
+    #startInner p { color: rgba(255,255,255,.74); line-height: 1.48; margin: 0 auto 20px; max-width: 520px; }
+    #startInner .small { font-size: 12px; color: rgba(255,255,255,.5); margin-top: 14px; line-height: 1.45; }
+
+    #result {
+      display: none; position: fixed; z-index: 80; inset: 0;
+      background: rgba(0,0,0,.95);
+      padding: max(18px, env(safe-area-inset-top)) 16px max(18px, env(safe-area-inset-bottom));
+      flex-direction: column; gap: 12px; justify-content: center; align-items: center;
+    }
+    #result.show { display: flex; }
+    #recordedVideo, #capturedImage {
+      width: min(94vw, 760px); max-height: 72vh; object-fit: contain; background: #000;
+      border-radius: 16px; border: 1px solid rgba(255,255,255,.12);
+    }
+    #capturedImage { display: none; }
+    #resultMeta { color: var(--muted); font-size: 12px; text-align: center; min-height: 16px; }
+    #resultActions { display: flex; gap: 9px; flex-wrap: wrap; justify-content: center; }
+    #fileInput { display: none; }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 720px) {
+      #topbar { gap: 6px; }
+      #topbar button, #topbar .fileLabel { min-height: 40px; padding: 8px 11px; font-size: 13px; }
+      #cameraSelect { display: none; }
+      #bottomPanel { grid-template-columns: auto 1fr auto; gap: 6px; }
+      .quickSlider { padding: 6px 9px; gap: 6px; }
+      .quickSlider label { display: none; }
+      #photoBtn { min-width: 48px; padding-left: 10px; padding-right: 10px; }
+      #record { min-width: 68px; padding-left: 11px; padding-right: 11px; }
+      #gestureHelp { font-size: 11px; }
+    }
+
+    @media (max-width: 430px) {
+      #bottomPanel { grid-template-columns: auto minmax(92px, 1fr) auto; }
+      .segmented button { padding-left: 10px; padding-right: 10px; font-size: 12px; }
+      .quickSlider output { min-width: 40px; }
+      #captureButtons { gap: 5px; }
+      #gestureHelp { bottom: calc(var(--safe-bottom) + 59px); max-width: 94vw; overflow: hidden; text-overflow: ellipsis; }
+    }
+
+    @media (max-height: 560px) and (orientation: landscape) {
+      #advancedPanel { max-height: calc(100vh - 72px); top: 52px; }
+      #gestureHelp { display: none; }
+      #status { top: 52px; }
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="stage"></div>
+  <video id="cameraVideo" autoplay muted playsinline></video>
+
+  <div id="startCard">
+    <div id="startInner">
+      <div class="eyebrow">Live 3D compositing</div>
+      <h1>Reality Glitch Camera</h1>
+      <p>Place a 3D scan directly over the live camera, manipulate it with touch, match its light to the room, and record the combined image in one continuous take.</p>
+      <button id="startCamera" class="primary">Start Camera + Mic</button>
+      <div class="small">Use HTTPS or localhost. Files stay on this device. Current Safari and Chrome are recommended.</div>
+    </div>
+  </div>
+
+  <div id="topbar">
+    <label class="fileLabel" for="fileInput">Load 3D</label>
+    <input id="fileInput" type="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.jpg,.jpeg,.png,.webp" />
+    <button id="flipCamera">Flip</button>
+    <select id="cameraSelect" aria-label="Camera lens" class="hidden"></select>
+    <div class="spacer"></div>
+    <button id="advancedToggle" aria-expanded="false">Controls</button>
+  </div>
+
+  <div id="status">Start the camera, then load a GLB/GLTF. For iPhone RealityScan OBJ exports, select the model OBJ, MTL, and texture image files together.</div>
+  <div id="gestureHelp">1 finger = selected tool · 2 fingers = move + pinch scale + twist</div>
+
+  <div id="bottomPanel">
+    <div class="segmented" aria-label="Model interaction mode">
+      <button id="moveMode" class="active">Move</button>
+      <button id="rotateMode">Rotate</button>
+    </div>
+
+    <div class="quickSlider">
+      <label for="scaleSlider">Scale</label>
+      <input id="scaleSlider" type="range" min="-1.3" max="1.7" step="0.01" value="0" aria-label="Relative model scale" />
+      <output id="scaleReadout" for="scaleSlider">1.00×</output>
+    </div>
+
+    <div id="captureButtons">
+      <button id="photoBtn" title="Take still image">Photo</button>
+      <button id="record" class="rec">● REC</button>
+    </div>
+  </div>
+
+  <div id="advancedPanel" aria-hidden="true">
+    <div class="panelHeader">
+      <h2>Controls</h2>
+      <button id="advancedClose">Done</button>
+    </div>
+
+    <div class="section">
+      <h3>Camera</h3>
+      <div class="controlRow" id="cameraRow">
+        <label for="advancedCameraSelect">Lens</label>
+        <select id="advancedCameraSelect" aria-label="Camera lens"></select>
+        <output></output>
+      </div>
+      <div class="controlRow hidden" id="zoomRow">
+        <label for="cameraZoom">Camera zoom</label>
+        <input id="cameraZoom" type="range" min="1" max="1" step="0.1" value="1" />
+        <output id="cameraZoomReadout">1.0×</output>
+      </div>
+      <div class="controlRow">
+        <label for="fovSlider">3D perspective</label>
+        <input id="fovSlider" type="range" min="25" max="90" step="1" value="45" />
+        <output id="fovReadout">45°</output>
+      </div>
+      <p class="hint">Use 3D Perspective to visually match the virtual object's perspective to the selected phone lens. It is not automatic calibration.</p>
+    </div>
+
+    <div class="section">
+      <h3>Model</h3>
+      <div class="controlRow">
+        <label for="scaleNumber">Relative scale</label>
+        <input id="scaleNumber" type="number" min="0.05" max="50" step="0.01" value="1" inputmode="decimal" />
+        <output>×</output>
+      </div>
+      <div class="controlRow">
+        <label for="opacity">Opacity</label>
+        <input id="opacity" type="range" min="0.05" max="1" step="0.01" value="1" />
+        <output id="opacityReadout">100%</output>
+      </div>
+      <div class="buttonRow">
+        <button id="centerModel">Center</button>
+        <button id="flipModel">Flip 180°</button>
+        <button id="resetModel">Reset All</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Lighting</h3>
+      <div class="controlRow">
+        <label for="lightIntensity">Brightness</label>
+        <input id="lightIntensity" type="range" min="0" max="8" step="0.1" value="2.5" />
+        <output id="lightIntensityReadout">2.5</output>
+      </div>
+      <div class="controlRow">
+        <label for="lightColor">Light color</label>
+        <input id="lightColor" type="color" value="#ffffff" />
+        <output id="lightColorReadout">#FFF</output>
+      </div>
+      <div class="controlRow">
+        <label for="lightHorizontal">Left ↔ Right</label>
+        <input id="lightHorizontal" type="range" min="-1" max="1" step="0.01" value="0.35" />
+        <output id="lightHorizontalReadout">+0.35</output>
+      </div>
+      <div class="controlRow">
+        <label for="lightVertical">Low ↔ High</label>
+        <input id="lightVertical" type="range" min="-1" max="1" step="0.01" value="0.35" />
+        <output id="lightVerticalReadout">+0.35</output>
+      </div>
+      <div class="controlRow">
+        <label for="fillIntensity">Ambient fill</label>
+        <input id="fillIntensity" type="range" min="0" max="4" step="0.1" value="1.4" />
+        <output id="fillIntensityReadout">1.4</output>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Ground Shadow</h3>
+      <div class="toggleRow">
+        <label for="shadowToggle">Enable shadow catcher</label>
+        <label class="switch"><input id="shadowToggle" type="checkbox" /><span></span></label>
+      </div>
+      <div id="shadowControls" class="hidden">
+        <div class="controlRow">
+          <label for="shadowOpacity">Shadow opacity</label>
+          <input id="shadowOpacity" type="range" min="0" max="0.9" step="0.01" value="0.42" />
+          <output id="shadowOpacityReadout">42%</output>
+        </div>
+        <div class="controlRow">
+          <label for="groundY">Ground height</label>
+          <input id="groundY" type="range" min="-8" max="4" step="0.05" value="-1" />
+          <output id="groundYReadout">-1.00</output>
+        </div>
+        <div class="controlRow">
+          <label for="groundTilt">Ground tilt</label>
+          <input id="groundTilt" type="range" min="-35" max="35" step="1" value="0" />
+          <output id="groundTiltReadout">0°</output>
+        </div>
+        <div class="buttonRow">
+          <button id="snapGround">Snap Ground to Model</button>
+        </div>
+        <p class="hint">This is a visual shadow catcher, not world tracking. Adjust the ground until it visually agrees with the camera view.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="recordBar">
+    <span id="timer">00:00</span>
+    <button id="stopRecord" class="rec">Stop</button>
+  </div>
+
+  <div id="result">
+    <video id="recordedVideo" controls playsinline preload="metadata"></video>
+    <img id="capturedImage" alt="Captured Reality Glitch still" />
+    <div id="resultMeta"></div>
+    <div id="resultActions">
+      <button id="shareResult" class="primary">Share / Save</button>
+      <a id="downloadResult" class="buttonLink" download>Download</a>
+      <button id="closeResult">Back to Camera</button>
+    </div>
+  </div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+// -----------------------------------------------------------------------------
+// DOM
+// -----------------------------------------------------------------------------
+const stage = document.getElementById('stage');
+const video = document.getElementById('cameraVideo');
+const startCard = document.getElementById('startCard');
+const statusEl = document.getElementById('status');
+const fileInput = document.getElementById('fileInput');
+const flipCameraBtn = document.getElementById('flipCamera');
+const cameraSelect = document.getElementById('cameraSelect');
+const advancedCameraSelect = document.getElementById('advancedCameraSelect');
+const advancedPanel = document.getElementById('advancedPanel');
+const advancedToggle = document.getElementById('advancedToggle');
+const moveModeBtn = document.getElementById('moveMode');
+const rotateModeBtn = document.getElementById('rotateMode');
+const scaleSlider = document.getElementById('scaleSlider');
+const scaleReadout = document.getElementById('scaleReadout');
+const scaleNumber = document.getElementById('scaleNumber');
+const opacityInput = document.getElementById('opacity');
+const opacityReadout = document.getElementById('opacityReadout');
+const recordBtn = document.getElementById('record');
+const photoBtn = document.getElementById('photoBtn');
+const stopRecordBtn = document.getElementById('stopRecord');
+const timerEl = document.getElementById('timer');
+const result = document.getElementById('result');
+const recordedVideo = document.getElementById('recordedVideo');
+const capturedImage = document.getElementById('capturedImage');
+const resultMeta = document.getElementById('resultMeta');
+const shareResultBtn = document.getElementById('shareResult');
+const downloadResult = document.getElementById('downloadResult');
+const zoomRow = document.getElementById('zoomRow');
+const cameraZoom = document.getElementById('cameraZoom');
+const cameraZoomReadout = document.getElementById('cameraZoomReadout');
+const fovSlider = document.getElementById('fovSlider');
+const fovReadout = document.getElementById('fovReadout');
+const lightIntensity = document.getElementById('lightIntensity');
+const lightIntensityReadout = document.getElementById('lightIntensityReadout');
+const lightColor = document.getElementById('lightColor');
+const lightColorReadout = document.getElementById('lightColorReadout');
+const lightHorizontal = document.getElementById('lightHorizontal');
+const lightHorizontalReadout = document.getElementById('lightHorizontalReadout');
+const lightVertical = document.getElementById('lightVertical');
+const lightVerticalReadout = document.getElementById('lightVerticalReadout');
+const fillIntensity = document.getElementById('fillIntensity');
+const fillIntensityReadout = document.getElementById('fillIntensityReadout');
+const shadowToggle = document.getElementById('shadowToggle');
+const shadowControls = document.getElementById('shadowControls');
+const shadowOpacity = document.getElementById('shadowOpacity');
+const shadowOpacityReadout = document.getElementById('shadowOpacityReadout');
+const groundY = document.getElementById('groundY');
+const groundYReadout = document.getElementById('groundYReadout');
+const groundTilt = document.getElementById('groundTilt');
+const groundTiltReadout = document.getElementById('groundTiltReadout');
+
+// -----------------------------------------------------------------------------
+// State
+// -----------------------------------------------------------------------------
+let facingMode = 'environment';
+let selectedDeviceId = '';
+let cameraStream = null;
+let videoTexture = null;
+let currentModel = null;
+let currentObjectURLs = [];
+let interactionMode = 'move';
+let recorder = null;
+let recordingStream = null;
+let recordingChunks = [];
+let recordingCanvasTrack = null;
+let timerInterval = null;
+let recordStartTime = 0;
+let resultBlob = null;
+let resultFile = null;
+let resultObjectURL = '';
+let resultKind = '';
+let wakeLock = null;
+let modelBaseBounds = null;
+let activeLoadToken = 0;
+
+// -----------------------------------------------------------------------------
+// Three.js — one composited WebGL canvas for camera + 3D
+// -----------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: false,
+  powerPreference: 'high-performance'
+});
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setClearColor(0x050505, 1);
+renderer.autoClear = false;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+
+const bgScene = new THREE.Scene();
+const bgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const bgMaterial = new THREE.MeshBasicMaterial({ color: 0x111111 });
+bgMaterial.toneMapped = false;
+const bgPlane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), bgMaterial);
+bgScene.add(bgPlane);
+
+const scene = new THREE.Scene();
+const camera3D = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera3D.position.set(0, 0, 5);
+
+const fillLight = new THREE.HemisphereLight(0xffffff, 0x555555, 1.4);
+scene.add(fillLight);
+
+const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+keyLight.position.set(3, 4, 5);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.set(1024, 1024);
+keyLight.shadow.camera.near = 0.1;
+keyLight.shadow.camera.far = 80;
+keyLight.shadow.camera.left = -20;
+keyLight.shadow.camera.right = 20;
+keyLight.shadow.camera.top = 20;
+keyLight.shadow.camera.bottom = -20;
+keyLight.shadow.bias = -0.0004;
+scene.add(keyLight);
+
+const modelContainer = new THREE.Group();
+const modelContent = new THREE.Group();
+modelContainer.add(modelContent);
+scene.add(modelContainer);
+keyLight.target = modelContainer;
+
+const shadowMaterial = new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.42 });
+shadowMaterial.depthWrite = false;
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), shadowMaterial);
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.position.y = -1;
+shadowCatcher.receiveShadow = true;
+shadowCatcher.visible = false;
+scene.add(shadowCatcher);
+
+function setStatus(message) {
+  statusEl.textContent = message;
+}
+
+function renderComposite() {
+  renderer.clear();
+  renderer.render(bgScene, bgCamera);
+  renderer.clearDepth();
+  renderer.render(scene, camera3D);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderComposite();
+}
+animate();
+
+function resize() {
+  const w = Math.max(1, window.innerWidth);
+  const h = Math.max(1, window.innerHeight);
+  let pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+  // Cap the rendered recording dimension to keep mobile GPU/encoder load sane.
+  const maxOutputSide = 1920;
+  const longest = Math.max(w, h) * pixelRatio;
+  if (longest > maxOutputSide) pixelRatio *= maxOutputSide / longest;
+
+  renderer.setPixelRatio(pixelRatio);
+  renderer.setSize(w, h, false);
+  camera3D.aspect = w / h;
+  camera3D.updateProjectionMatrix();
+  updateVideoCrop();
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 250));
+resize();
+
+function updateVideoCrop() {
+  if (!videoTexture || !video.videoWidth || !video.videoHeight) return;
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const viewAspect = Math.max(1, window.innerWidth) / Math.max(1, window.innerHeight);
+
+  // Center-crop the live camera so it fills the output canvas without stretching.
+  if (videoAspect > viewAspect) {
+    const visibleX = viewAspect / videoAspect;
+    videoTexture.repeat.set(visibleX, 1);
+    videoTexture.offset.set((1 - visibleX) / 2, 0);
+  } else {
+    const visibleY = videoAspect / viewAspect;
+    videoTexture.repeat.set(1, visibleY);
+    videoTexture.offset.set(0, (1 - visibleY) / 2);
+  }
+  videoTexture.needsUpdate = true;
+}
+
+// -----------------------------------------------------------------------------
+// Camera
+// -----------------------------------------------------------------------------
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); }
+  catch (_) { wakeLock = null; }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && cameraStream) requestWakeLock();
+});
+
+function stopCameraStream() {
+  if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+  cameraStream = null;
+}
+
+function buildVideoConstraints() {
+  const constraints = {
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    frameRate: { ideal: 30, max: 60 }
+  };
+  if (selectedDeviceId) constraints.deviceId = { exact: selectedDeviceId };
+  else constraints.facingMode = { ideal: facingMode };
+  return constraints;
+}
+
+async function startCamera() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setStatus('This browser does not provide camera access. Use a current Safari or Chrome browser over HTTPS.');
+    return false;
+  }
+
+  stopCameraStream();
+  const videoConstraints = buildVideoConstraints();
+  let micUnavailable = false;
+
+  try {
+    try {
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: true });
+    } catch (combinedError) {
+      micUnavailable = true;
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+    }
+
+    video.srcObject = cameraStream;
+    await video.play();
+
+    if (videoTexture) videoTexture.dispose();
+    videoTexture = new THREE.VideoTexture(video);
+    videoTexture.colorSpace = THREE.SRGBColorSpace;
+    videoTexture.minFilter = THREE.LinearFilter;
+    videoTexture.magFilter = THREE.LinearFilter;
+    videoTexture.generateMipmaps = false;
+    bgMaterial.map = videoTexture;
+    bgMaterial.color.set(0xffffff);
+    bgMaterial.needsUpdate = true;
+
+    const track = cameraStream.getVideoTracks()[0];
+    const settings = track?.getSettings?.() || {};
+    selectedDeviceId = settings.deviceId || selectedDeviceId;
+    facingMode = settings.facingMode || facingMode;
+
+    video.addEventListener('loadedmetadata', updateVideoCrop, { once: true });
+    setTimeout(updateVideoCrop, 160);
+    await populateCameraDevices();
+    updateCameraZoomUI();
+    await requestWakeLock();
+
+    startCard.classList.add('hidden');
+    setStatus(micUnavailable ? 'Camera ready. Microphone is unavailable; recordings will be silent.' : 'Camera ready. Load a 3D scan.');
+    return true;
+  } catch (err) {
+    console.error(err);
+    setStatus('Could not start the camera. Open this page over HTTPS, allow camera access, and try again.');
+    return false;
+  }
+}
+
+async function populateCameraDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const makeOptions = (select) => {
+      const previous = selectedDeviceId;
+      select.innerHTML = '';
+      devices.forEach((device, index) => {
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.textContent = device.label || `Camera ${index + 1}`;
+        select.appendChild(option);
+      });
+      if (devices.some(d => d.deviceId === previous)) select.value = previous;
+    };
+
+    makeOptions(cameraSelect);
+    makeOptions(advancedCameraSelect);
+    cameraSelect.classList.toggle('hidden', devices.length < 2);
+  } catch (err) {
+    console.warn('Could not enumerate cameras', err);
+  }
+}
+
+async function selectCamera(deviceId) {
+  if (!deviceId || document.body.classList.contains('recording')) return;
+  selectedDeviceId = deviceId;
+  await startCamera();
+}
+
+function updateCameraZoomUI() {
+  const track = cameraStream?.getVideoTracks?.()[0];
+  const capabilities = track?.getCapabilities?.() || {};
+  const settings = track?.getSettings?.() || {};
+  const zoom = capabilities.zoom;
+
+  if (!zoom || typeof zoom.min !== 'number' || typeof zoom.max !== 'number' || zoom.max <= zoom.min) {
+    zoomRow.classList.add('hidden');
+    return;
+  }
+
+  zoomRow.classList.remove('hidden');
+  cameraZoom.min = String(zoom.min);
+  cameraZoom.max = String(zoom.max);
+  cameraZoom.step = String(zoom.step || 0.1);
+  cameraZoom.value = String(settings.zoom ?? zoom.min);
+  cameraZoomReadout.textContent = `${Number(cameraZoom.value).toFixed(1)}×`;
+}
+
+async function applyCameraZoom() {
+  const track = cameraStream?.getVideoTracks?.()[0];
+  if (!track?.applyConstraints) return;
+  const value = Number(cameraZoom.value);
+  cameraZoomReadout.textContent = `${value.toFixed(1)}×`;
+  try { await track.applyConstraints({ advanced: [{ zoom: value }] }); }
+  catch (err) { console.warn('Camera zoom not accepted', err); }
+}
+
+document.getElementById('startCamera').addEventListener('click', startCamera);
+flipCameraBtn.addEventListener('click', async () => {
+  if (document.body.classList.contains('recording')) return;
+  selectedDeviceId = '';
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera();
+});
+cameraSelect.addEventListener('change', () => selectCamera(cameraSelect.value));
+advancedCameraSelect.addEventListener('change', () => selectCamera(advancedCameraSelect.value));
+cameraZoom.addEventListener('input', applyCameraZoom);
+navigator.mediaDevices?.addEventListener?.('devicechange', populateCameraDevices);
+
+// -----------------------------------------------------------------------------
+// Model loading
+// -----------------------------------------------------------------------------
+function releaseOldURLs() {
+  currentObjectURLs.forEach(url => URL.revokeObjectURL(url));
+  currentObjectURLs = [];
+}
+
+function disposeMaterial(material) {
+  if (!material) return;
+  for (const key of Object.keys(material)) {
+    const value = material[key];
+    if (value?.isTexture) value.dispose?.();
+  }
+  material.dispose?.();
+}
+
+function clearModel() {
+  while (modelContent.children.length) {
+    const child = modelContent.children[modelContent.children.length - 1];
+    modelContent.remove(child);
+    child.traverse?.(node => {
+      node.geometry?.dispose?.();
+      if (node.material) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach(disposeMaterial);
+      }
+    });
+  }
+  currentModel = null;
+  modelBaseBounds = null;
+}
+
+function prepareMaterialsAndShadows(object, { sourceType = 'generic' } = {}) {
+  const lineObjects = [];
+  let meshCount = 0;
+  let texturedMaterialCount = 0;
+  let materialCount = 0;
+
+  object.traverse(node => {
+    // Photogrammetry OBJ files can contain both polygon faces and OBJ `l` records.
+    // Three.js may expose those as Line/LineSegments objects. They are scan/debug data,
+    // not the shaded surface students expect to see, so hide them when a real mesh exists.
+    if (node.isLine || node.isLineSegments || node.isPoints) {
+      lineObjects.push(node);
+      return;
+    }
+    if (!node.isMesh) return;
+
+    meshCount += 1;
+    node.castShadow = true;
+    node.receiveShadow = false;
+    if (!node.material) return;
+
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    materials.forEach(mat => {
+      materialCount += 1;
+
+      // Scan OBJ materials should render as a solid textured surface, not as a wireframe.
+      // Some OBJ/MTL exporters also disagree about transparency semantics, which can make
+      // a dense triangulated scan look like a white spider web. Normalize OBJ scan materials.
+      if (sourceType === 'obj') {
+        if ('wireframe' in mat) mat.wireframe = false;
+        mat.side = THREE.DoubleSide;
+        mat.opacity = 1;
+        mat.transparent = false;
+        mat.depthWrite = true;
+        mat.depthTest = true;
+      }
+
+      if (mat.map) {
+        texturedMaterialCount += 1;
+        mat.map.colorSpace = THREE.SRGBColorSpace;
+        mat.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+        mat.map.needsUpdate = true;
+      }
+
+      if (mat.userData.realityGlitchBaseOpacity === undefined) {
+        mat.userData.realityGlitchBaseOpacity = Number.isFinite(mat.opacity) ? mat.opacity : 1;
+        mat.userData.realityGlitchBaseTransparent = !!mat.transparent;
+        mat.userData.realityGlitchBaseDepthWrite = mat.depthWrite !== false;
+      }
+      mat.needsUpdate = true;
+    });
+  });
+
+  // If the OBJ has both faces and line/point helper data, keep only the surface.
+  if (meshCount > 0) {
+    lineObjects.forEach(node => node.parent?.remove(node));
+  }
+
+  return { meshCount, lineCount: lineObjects.length, materialCount, texturedMaterialCount };
+}
+
+function fitAndInstallModel(object, options = {}) {
+  // Prepare first so line-only helper geometry cannot distort the bounding box.
+  const stats = prepareMaterialsAndShadows(object, options);
+  object.updateMatrixWorld(true);
+  const initialBox = new THREE.Box3().setFromObject(object);
+  if (initialBox.isEmpty() || stats.meshCount === 0) {
+    throw new Error('The selected file does not contain a renderable surface mesh. Choose the processed model OBJ/GLB, not a point-cloud or camera file.');
+  }
+
+  const center = initialBox.getCenter(new THREE.Vector3());
+  const size = initialBox.getSize(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+  clearModel();
+  const normalized = new THREE.Group();
+  normalized.add(object);
+  normalized.position.copy(center).multiplyScalar(-1);
+  normalized.scale.setScalar(2 / maxDim);
+  modelContent.add(normalized);
+  modelContent.updateMatrixWorld(true);
+
+  modelBaseBounds = new THREE.Box3().setFromObject(modelContent);
+  currentModel = modelContent;
+  resetModelTransform();
+  applyOpacity(Number(opacityInput.value));
+  snapGroundToModel();
+
+  let message = 'Scan loaded. Drag to move, switch to Rotate to turn it, or pinch/twist with two fingers.';
+  if (options.sourceType === 'obj' && stats.texturedMaterialCount === 0) {
+    message = 'OBJ surface loaded, but no diffuse texture is attached yet. Select the OBJ, MTL, and texture image file(s) together for the photographed material.';
+  } else if (stats.lineCount > 0) {
+    message = `Scan loaded with textured surface; ${stats.lineCount} line/point helper object${stats.lineCount === 1 ? '' : 's'} were removed.`;
+  }
+  setStatus(message);
+}
+
+function basename(url) {
+  let key = url;
+  try { key = decodeURIComponent(url); } catch (_) {}
+  return key.split('?')[0].split('#')[0].split('/').pop() || key;
+}
+
+function makeLoadingManager(fileMap) {
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    const key = basename(url);
+    return fileMap.get(key) || fileMap.get(key.toLowerCase()) || url;
+  });
+  return manager;
+}
+
+function chooseBestOBJ(files) {
+  const objs = files.filter(f => f.name.toLowerCase().endsWith('.obj'));
+  if (!objs.length) return null;
+  const score = (file) => {
+    const n = file.name.toLowerCase();
+    let value = Math.log10(Math.max(1, file.size));
+    if (/model|mesh|textured|reconstruction/.test(n)) value += 20;
+    if (/point|cloud|camera|sparse|dense|trajectory/.test(n)) value -= 30;
+    return value;
+  };
+  return [...objs].sort((a, b) => score(b) - score(a))[0];
+}
+
+function chooseMatchingMTL(files, objFile) {
+  const mtls = files.filter(f => f.name.toLowerCase().endsWith('.mtl'));
+  if (!mtls.length) return null;
+  const stem = objFile?.name.replace(/\.obj$/i, '').toLowerCase();
+  return mtls.find(f => f.name.replace(/\.mtl$/i, '').toLowerCase() === stem) || mtls[0];
+}
+
+function chooseDiffuseImage(files) {
+  const images = files.filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name));
+  if (!images.length) return null;
+  const likelyDiffuse = images.filter(f => !/(normal|norm|_n\b|nrm|rough|metal|ao|occlusion|height|depth)/i.test(f.name));
+  const candidates = likelyDiffuse.length ? likelyDiffuse : images;
+  return [...candidates].sort((a, b) => b.size - a.size)[0];
+}
+
+function sanitizeOBJText(text) {
+  const hasFaces = /^\s*f\s+/m.test(text);
+  const hasLineData = /^\s*(l|p)\s+/m.test(text);
+  if (!hasFaces || !hasLineData) return { text, removedPrimitiveLines: 0 };
+
+  let removedPrimitiveLines = 0;
+  const clean = text.split(/\r?\n/).filter(line => {
+    if (/^\s*(l|p)\s+/.test(line)) {
+      removedPrimitiveLines += 1;
+      return false;
+    }
+    return true;
+  }).join('\n');
+  return { text: clean, removedPrimitiveLines };
+}
+
+async function parseLocalMTL(mtlFile, manager) {
+  if (!mtlFile) return null;
+  const loader = new MTLLoader(manager);
+  const text = await mtlFile.text();
+  const materials = loader.parse(text, '');
+  materials.preload();
+  return materials;
+}
+
+async function parseLocalOBJ(objFile, materials, manager) {
+  const rawText = await objFile.text();
+  const sanitized = sanitizeOBJText(rawText);
+  const loader = new OBJLoader(manager);
+  if (materials) loader.setMaterials(materials);
+  const object = loader.parse(sanitized.text);
+  return { object, removedPrimitiveLines: sanitized.removedPrimitiveLines };
+}
+
+function objectHasDiffuseTexture(object) {
+  let found = false;
+  object.traverse(node => {
+    if (found || !node.isMesh || !node.material) return;
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    if (materials.some(mat => !!mat.map)) found = true;
+  });
+  return found;
+}
+
+async function addFallbackDiffuseTexture(object, imageFile, fileMap, manager) {
+  if (!imageFile || objectHasDiffuseTexture(object)) return false;
+  const url = fileMap.get(imageFile.name) || fileMap.get(imageFile.name.toLowerCase());
+  if (!url) return false;
+
+  const texture = await new Promise((resolve, reject) => {
+    new THREE.TextureLoader(manager).load(url, resolve, undefined, reject);
+  }).catch(() => null);
+  if (!texture) return false;
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  texture.needsUpdate = true;
+
+  let applied = false;
+  object.traverse(node => {
+    if (!node.isMesh || !node.geometry?.attributes?.uv || !node.material) return;
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    materials.forEach(mat => {
+      if (!mat.map) {
+        mat.map = texture;
+        if (mat.color?.set) mat.color.set(0xffffff);
+        if ('wireframe' in mat) mat.wireframe = false;
+        mat.opacity = 1;
+        mat.transparent = false;
+        mat.depthWrite = true;
+        mat.side = THREE.DoubleSide;
+        mat.needsUpdate = true;
+        applied = true;
+      }
+    });
+  });
+  return applied;
+}
+
+fileInput.addEventListener('change', async (event) => {
+  const files = [...event.target.files];
+  if (!files.length) return;
+  const loadToken = ++activeLoadToken;
+
+  const totalMB = files.reduce((n, f) => n + f.size, 0) / (1024 * 1024);
+  setStatus(totalMB > 120
+    ? `Large scan (${totalMB.toFixed(0)} MB). It may be slow or run out of memory on a phone.`
+    : 'Loading 3D scan…');
+
+  releaseOldURLs();
+  const fileMap = new Map();
+  for (const file of files) {
+    const url = URL.createObjectURL(file);
+    currentObjectURLs.push(url);
+    fileMap.set(file.name, url);
+    fileMap.set(file.name.toLowerCase(), url);
+  }
+
+  const findExt = (ext) => files.find(f => f.name.toLowerCase().endsWith(ext));
+  const glb = findExt('.glb');
+  const gltf = findExt('.gltf');
+  const obj = chooseBestOBJ(files);
+  const mtl = chooseMatchingMTL(files, obj);
+  const diffuseImage = chooseDiffuseImage(files);
+  const manager = makeLoadingManager(fileMap);
+
+  const installIfCurrent = (object, options = {}) => {
+    if (loadToken !== activeLoadToken) return;
+    try { fitAndInstallModel(object, options); }
+    catch (err) { console.error(err); setStatus(err.message || 'Could not install this model.'); }
+  };
+
+  try {
+    if (glb || gltf) {
+      const source = glb || gltf;
+      const draco = new DRACOLoader(manager);
+      draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/draco/');
+
+      const loader = new GLTFLoader(manager);
+      loader.setDRACOLoader(draco);
+      loader.setMeshoptDecoder(MeshoptDecoder);
+      loader.load(
+        fileMap.get(source.name),
+        data => { draco.dispose(); installIfCurrent(data.scene, { sourceType: 'gltf' }); },
+        undefined,
+        err => {
+          draco.dispose();
+          console.error(err);
+          if (loadToken === activeLoadToken) setStatus('Could not load the GLB/GLTF. For .gltf, select its .bin and texture files at the same time.');
+        }
+      );
+    } else if (obj) {
+      // Parse OBJ text locally instead of feeding the raw file directly to OBJLoader.
+      // This lets us remove `l`/`p` helper records that can make photogrammetry exports
+      // render as a dense white wireframe instead of their textured polygon surface.
+      const materials = await parseLocalMTL(mtl, manager).catch(err => {
+        console.warn('MTL parse failed; continuing with OBJ geometry.', err);
+        return null;
+      });
+      if (loadToken !== activeLoadToken) return;
+
+      const parsed = await parseLocalOBJ(obj, materials, manager);
+      if (loadToken !== activeLoadToken) return;
+
+      // If an OBJ was supplied without a usable MTL but a likely diffuse image is selected,
+      // try the common RealityScan-style single-atlas case automatically.
+      const fallbackTextureApplied = await addFallbackDiffuseTexture(parsed.object, diffuseImage, fileMap, manager);
+      if (loadToken !== activeLoadToken) return;
+
+      installIfCurrent(parsed.object, {
+        sourceType: 'obj',
+        removedPrimitiveLines: parsed.removedPrimitiveLines,
+        fallbackTextureApplied
+      });
+
+      if (parsed.removedPrimitiveLines > 0) {
+        console.info(`Reality Glitch: removed ${parsed.removedPrimitiveLines} OBJ line/point records before rendering the surface.`);
+      }
+    } else {
+      setStatus('Choose a .glb/.gltf file, or the processed model .obj. For RealityScan on iPhone, select the OBJ, MTL, and diffuse/normal texture images together.');
+    }
+  } catch (err) {
+    console.error(err);
+    if (loadToken === activeLoadToken) {
+      setStatus('Could not load this model. For iPhone RealityScan, select the processed model OBJ + MTL + texture images together; avoid point-cloud/camera OBJ files.');
+    }
+  } finally {
+    // Allow selecting the same files again later.
+    fileInput.value = '';
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Model controls
+// -----------------------------------------------------------------------------
+function clampScale(value) {
+  return THREE.MathUtils.clamp(Number(value) || 1, 0.05, 50);
+}
+
+function sliderValueForScale(scale) {
+  return THREE.MathUtils.clamp(Math.log10(clampScale(scale)), Number(scaleSlider.min), Number(scaleSlider.max));
+}
+
+function setModelScale(scale, { syncSlider = true } = {}) {
+  const value = clampScale(scale);
+  modelContainer.scale.setScalar(value);
+  scaleReadout.textContent = `${value < 10 ? value.toFixed(2) : value.toFixed(1)}×`;
+  scaleNumber.value = value.toFixed(value < 10 ? 2 : 1);
+  if (syncSlider) scaleSlider.value = String(sliderValueForScale(value));
+}
+
+function resetModelTransform() {
+  modelContainer.position.set(0, 0, 0);
+  modelContainer.rotation.set(0, 0, 0);
+  setModelScale(1);
+}
+
+function centerModel() {
+  modelContainer.position.x = 0;
+  modelContainer.position.y = 0;
+}
+
+function setMode(mode) {
+  interactionMode = mode;
+  moveModeBtn.classList.toggle('active', mode === 'move');
+  rotateModeBtn.classList.toggle('active', mode === 'rotate');
+}
+
+function applyOpacity(value) {
+  const opacity = THREE.MathUtils.clamp(Number(value), 0.05, 1);
+  opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
+  if (!currentModel) return;
+
+  currentModel.traverse(node => {
+    if (!node.isMesh || !node.material) return;
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    materials.forEach(mat => {
+      const baseOpacity = mat.userData.realityGlitchBaseOpacity ?? 1;
+      const baseTransparent = mat.userData.realityGlitchBaseTransparent ?? false;
+      const baseDepthWrite = mat.userData.realityGlitchBaseDepthWrite ?? true;
+      mat.opacity = baseOpacity * opacity;
+      mat.transparent = baseTransparent || mat.opacity < 0.999;
+      mat.depthWrite = baseDepthWrite && opacity >= 0.999;
+      mat.needsUpdate = true;
+    });
+  });
+}
+
+document.getElementById('resetModel').addEventListener('click', () => {
+  resetModelTransform();
+  snapGroundToModel();
+});
+document.getElementById('centerModel').addEventListener('click', centerModel);
+document.getElementById('flipModel').addEventListener('click', () => { modelContainer.rotation.y += Math.PI; });
+moveModeBtn.addEventListener('click', () => setMode('move'));
+rotateModeBtn.addEventListener('click', () => setMode('rotate'));
+opacityInput.addEventListener('input', () => applyOpacity(Number(opacityInput.value)));
+
+scaleSlider.addEventListener('input', () => setModelScale(10 ** Number(scaleSlider.value), { syncSlider: false }));
+scaleNumber.addEventListener('change', () => setModelScale(scaleNumber.value));
+scaleNumber.addEventListener('blur', () => setModelScale(scaleNumber.value));
+
+const pointers = new Map();
+let singleStart = null;
+let multiStart = null;
+
+function worldUnitsPerPixel() {
+  const distance = Math.abs(camera3D.position.z - modelContainer.position.z);
+  const visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera3D.fov) / 2) * distance;
+  return visibleHeight / Math.max(1, window.innerHeight);
+}
+
+function pointerPair() {
+  const pts = [...pointers.values()];
+  if (pts.length < 2) return null;
+  const a = pts[0], b = pts[1];
+  return {
+    midX: (a.x + b.x) / 2,
+    midY: (a.y + b.y) / 2,
+    dist: Math.hypot(b.x - a.x, b.y - a.y),
+    angle: Math.atan2(b.y - a.y, b.x - a.x)
+  };
+}
+
+function beginSingle() {
+  const p = [...pointers.values()][0];
+  if (!p) { singleStart = null; return; }
+  singleStart = {
+    x: p.x,
+    y: p.y,
+    px: modelContainer.position.x,
+    py: modelContainer.position.y,
+    rx: modelContainer.rotation.x,
+    ry: modelContainer.rotation.y
+  };
+}
+
+function beginMulti() {
+  const pair = pointerPair();
+  if (!pair) { multiStart = null; return; }
+  multiStart = {
+    ...pair,
+    scale: modelContainer.scale.x,
+    px: modelContainer.position.x,
+    py: modelContainer.position.y,
+    rz: modelContainer.rotation.z
+  };
+}
+
+const touchSurface = renderer.domElement;
+touchSurface.addEventListener('contextmenu', e => e.preventDefault());
+
+touchSurface.addEventListener('pointerdown', e => {
+  if (!currentModel) return;
+  e.preventDefault();
+  touchSurface.setPointerCapture?.(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size === 1) beginSingle();
+  if (pointers.size >= 2) beginMulti();
+});
+
+touchSurface.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId) || !currentModel) return;
+  e.preventDefault();
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size >= 2) {
+    const now = pointerPair();
+    if (!now || !multiStart) return;
+    const wpp = worldUnitsPerPixel();
+    const scaleFactor = now.dist / Math.max(1, multiStart.dist);
+    setModelScale(multiStart.scale * scaleFactor);
+    modelContainer.rotation.z = multiStart.rz + (now.angle - multiStart.angle);
+    modelContainer.position.x = multiStart.px + (now.midX - multiStart.midX) * wpp;
+    modelContainer.position.y = multiStart.py - (now.midY - multiStart.midY) * wpp;
+    return;
+  }
+
+  const p = [...pointers.values()][0];
+  if (!p || !singleStart) return;
+  const dx = p.x - singleStart.x;
+  const dy = p.y - singleStart.y;
+
+  if (interactionMode === 'move') {
+    const wpp = worldUnitsPerPixel();
+    modelContainer.position.x = singleStart.px + dx * wpp;
+    modelContainer.position.y = singleStart.py - dy * wpp;
+  } else {
+    modelContainer.rotation.y = singleStart.ry + dx * 0.012;
+    modelContainer.rotation.x = singleStart.rx + dy * 0.012;
+  }
+});
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size >= 2) beginMulti();
+  else if (pointers.size === 1) { multiStart = null; beginSingle(); }
+  else { singleStart = null; multiStart = null; }
+}
+touchSurface.addEventListener('pointerup', endPointer);
+touchSurface.addEventListener('pointercancel', endPointer);
+
+// -----------------------------------------------------------------------------
+// Perspective + lighting + shadow catcher
+// -----------------------------------------------------------------------------
+function updateFov() {
+  camera3D.fov = Number(fovSlider.value);
+  camera3D.updateProjectionMatrix();
+  fovReadout.textContent = `${Math.round(camera3D.fov)}°`;
+}
+fovSlider.addEventListener('input', updateFov);
+
+function updateLighting() {
+  keyLight.intensity = Number(lightIntensity.value);
+  keyLight.color.set(lightColor.value);
+  fillLight.intensity = Number(fillIntensity.value);
+
+  const horizontal = Number(lightHorizontal.value);
+  const vertical = Number(lightVertical.value);
+  const azimuth = THREE.MathUtils.degToRad(horizontal * 90);
+  const elevation = THREE.MathUtils.degToRad(45 + vertical * 35);
+  const radius = 8;
+  keyLight.position.set(
+    radius * Math.sin(azimuth) * Math.cos(elevation),
+    radius * Math.sin(elevation),
+    radius * Math.cos(azimuth) * Math.cos(elevation)
+  );
+
+  lightIntensityReadout.textContent = keyLight.intensity.toFixed(1);
+  lightColorReadout.textContent = lightColor.value.toUpperCase();
+  lightHorizontalReadout.textContent = `${horizontal >= 0 ? '+' : ''}${horizontal.toFixed(2)}`;
+  lightVerticalReadout.textContent = `${vertical >= 0 ? '+' : ''}${vertical.toFixed(2)}`;
+  fillIntensityReadout.textContent = fillLight.intensity.toFixed(1);
+}
+[lightIntensity, lightColor, lightHorizontal, lightVertical, fillIntensity].forEach(el => el.addEventListener('input', updateLighting));
+updateLighting();
+
+function updateShadow() {
+  shadowCatcher.visible = shadowToggle.checked;
+  shadowControls.classList.toggle('hidden', !shadowToggle.checked);
+  shadowMaterial.opacity = Number(shadowOpacity.value);
+  shadowCatcher.position.y = Number(groundY.value);
+  shadowCatcher.rotation.x = -Math.PI / 2 + THREE.MathUtils.degToRad(Number(groundTilt.value));
+  shadowOpacityReadout.textContent = `${Math.round(Number(shadowOpacity.value) * 100)}%`;
+  groundYReadout.textContent = Number(groundY.value).toFixed(2);
+  groundTiltReadout.textContent = `${Math.round(Number(groundTilt.value))}°`;
+}
+
+function snapGroundToModel() {
+  if (!modelBaseBounds) return;
+  // Approximate the normalized model's lower edge, ignoring current rotation.
+  const y = modelContainer.position.y + modelBaseBounds.min.y * modelContainer.scale.y;
+  groundY.value = String(THREE.MathUtils.clamp(y, Number(groundY.min), Number(groundY.max)));
+  updateShadow();
+}
+
+shadowToggle.addEventListener('change', updateShadow);
+[shadowOpacity, groundY, groundTilt].forEach(el => el.addEventListener('input', updateShadow));
+document.getElementById('snapGround').addEventListener('click', snapGroundToModel);
+updateShadow();
+
+// -----------------------------------------------------------------------------
+// Advanced panel
+// -----------------------------------------------------------------------------
+function setAdvanced(open) {
+  advancedPanel.classList.toggle('show', open);
+  advancedPanel.setAttribute('aria-hidden', String(!open));
+  advancedToggle.setAttribute('aria-expanded', String(open));
+}
+advancedToggle.addEventListener('click', () => setAdvanced(!advancedPanel.classList.contains('show')));
+document.getElementById('advancedClose').addEventListener('click', () => setAdvanced(false));
+
+// -----------------------------------------------------------------------------
+// Still image capture
+// -----------------------------------------------------------------------------
+function revokeResultURL() {
+  if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
+  resultObjectURL = '';
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function makeTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
+}
+
+function showResult(blob, file, kind) {
+  revokeResultURL();
+  resultBlob = blob;
+  resultFile = file;
+  resultKind = kind;
+  resultObjectURL = URL.createObjectURL(blob);
+
+  recordedVideo.pause();
+  recordedVideo.removeAttribute('src');
+  capturedImage.removeAttribute('src');
+
+  if (kind === 'video') {
+    capturedImage.style.display = 'none';
+    recordedVideo.style.display = 'block';
+    recordedVideo.src = resultObjectURL;
+    recordedVideo.load();
+    downloadResult.textContent = 'Download WebM';
+    resultMeta.textContent = `WebM video · ${formatBytes(blob.size)}`;
+  } else {
+    recordedVideo.style.display = 'none';
+    capturedImage.style.display = 'block';
+    capturedImage.src = resultObjectURL;
+    downloadResult.textContent = 'Download JPEG';
+    resultMeta.textContent = `JPEG still · ${formatBytes(blob.size)}`;
+  }
+
+  downloadResult.href = resultObjectURL;
+  downloadResult.download = file.name;
+  result.classList.add('show');
+}
+
+async function takePhoto() {
+  if (!cameraStream) {
+    const ok = await startCamera();
+    if (!ok) return;
+  }
+  renderComposite();
+  const blob = await new Promise(resolve => renderer.domElement.toBlob(resolve, 'image/jpeg', 0.92));
+  if (!blob) {
+    setStatus('Could not create a still image on this device.');
+    return;
+  }
+  const file = new File([blob], `RealityGlitch-${makeTimestamp()}.jpg`, { type: 'image/jpeg' });
+  showResult(blob, file, 'image');
+}
+photoBtn.addEventListener('click', takePhoto);
+
+// -----------------------------------------------------------------------------
+// Recording — deliberately WebM only for consistent extension/container handling
+// -----------------------------------------------------------------------------
+function pickWebMMimeType(hasAudio) {
+  if (!window.MediaRecorder?.isTypeSupported) return '';
+  const options = hasAudio
+    ? [
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp9,opus',
+        'video/webm'
+      ]
+    : [
+        'video/webm;codecs=vp8',
+        'video/webm;codecs=vp9',
+        'video/webm'
+      ];
+  return options.find(type => MediaRecorder.isTypeSupported(type)) || '';
+}
+
+function formatTime(ms) {
+  const total = Math.floor(ms / 1000);
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+async function startRecording() {
+  if (!cameraStream) {
+    const ok = await startCamera();
+    if (!ok) return;
+  }
+
+  if (!window.MediaRecorder || !renderer.domElement.captureStream) {
+    setStatus('This browser cannot record the composited canvas. Use a current Safari or Chrome browser.');
+    return;
+  }
+
+  const canvasStream = renderer.domElement.captureStream(30);
+  recordingCanvasTrack = canvasStream.getVideoTracks()[0] || null;
+  if (!recordingCanvasTrack) {
+    setStatus('Could not capture the rendered canvas on this browser.');
+    return;
+  }
+
+  try { recordingCanvasTrack.contentHint = 'motion'; } catch (_) {}
+
+  const audioTrack = cameraStream.getAudioTracks()[0] || null;
+  const mimeType = pickWebMMimeType(!!audioTrack);
+  if (!mimeType) {
+    recordingCanvasTrack.stop?.();
+    recordingCanvasTrack = null;
+    setStatus('This browser cannot create WebM recordings. Update Safari/iOS or use a current Chrome browser.');
+    return;
+  }
+
+  recordingStream = new MediaStream([recordingCanvasTrack]);
+  if (audioTrack) recordingStream.addTrack(audioTrack);
+  recordingChunks = [];
+
+  try {
+    recorder = new MediaRecorder(recordingStream, {
+      mimeType,
+      videoBitsPerSecond: 6_000_000,
+      audioBitsPerSecond: 128_000
+    });
+  } catch (err) {
+    console.error(err);
+    recordingCanvasTrack.stop?.();
+    recordingCanvasTrack = null;
+    setStatus('Recording could not start with this browser/codec.');
+    return;
+  }
+
+  recorder.ondataavailable = event => {
+    if (event.data?.size) recordingChunks.push(event.data);
+  };
+  recorder.onerror = event => {
+    console.error('MediaRecorder error', event);
+    setStatus('The browser reported a recording error. Try a shorter clip or a smaller model.');
+  };
+  recorder.onstop = finishRecording;
+
+  // No timeslice: short classroom takes produce one finalized WebM chunk on stop,
+  // avoiding fragmented output that some players handle poorly.
+  recorder.start();
+  document.body.classList.add('recording');
+  setAdvanced(false);
+  recordStartTime = performance.now();
+  timerEl.textContent = '00:00';
+  timerInterval = setInterval(() => {
+    timerEl.textContent = formatTime(performance.now() - recordStartTime);
+  }, 250);
+}
+
+function stopRecording() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
+
+function finishRecording() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  document.body.classList.remove('recording');
+
+  recordingCanvasTrack?.stop?.();
+  recordingCanvasTrack = null;
+  recordingStream = null;
+
+  const mimeType = recorder?.mimeType || 'video/webm';
+  const blob = new Blob(recordingChunks, { type: mimeType });
+  recorder = null;
+
+  if (!blob.size) {
+    setStatus('The browser returned an empty recording. Try again with a shorter take.');
+    return;
+  }
+
+  const file = new File([blob], `RealityGlitch-${makeTimestamp()}.webm`, { type: mimeType });
+  showResult(blob, file, 'video');
+}
+
+recordBtn.addEventListener('click', startRecording);
+stopRecordBtn.addEventListener('click', stopRecording);
+
+recordedVideo.addEventListener('error', () => {
+  if (resultKind === 'video') {
+    resultMeta.textContent = `WebM video · ${formatBytes(resultBlob?.size)} · Preview failed in this browser, but the file is still available below.`;
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Result sharing / saving
+// -----------------------------------------------------------------------------
+document.getElementById('closeResult').addEventListener('click', () => {
+  result.classList.remove('show');
+  recordedVideo.pause();
+});
+
+shareResultBtn.addEventListener('click', async () => {
+  if (!resultFile) return;
+  try {
+    if (navigator.canShare?.({ files: [resultFile] })) {
+      await navigator.share({ files: [resultFile], title: 'Reality Glitch' });
+    } else {
+      downloadResult.click();
+    }
+  } catch (err) {
+    if (err?.name !== 'AbortError') {
+      console.error(err);
+      downloadResult.click();
+    }
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Cleanup + defensive interaction behavior
+// -----------------------------------------------------------------------------
+document.addEventListener('touchmove', event => {
+  if (event.target === renderer.domElement) event.preventDefault();
+}, { passive: false });
+
+window.addEventListener('beforeunload', () => {
+  stopCameraStream();
+  releaseOldURLs();
+  revokeResultURL();
+  wakeLock?.release?.().catch?.(() => {});
+});
+
+</script>
+</body>
+</html>
