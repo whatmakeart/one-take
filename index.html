@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#050505" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Reality Glitch Camera</title>
+  <title>Reality Glitch Camera v6</title>
   <style>
     :root {
       color-scheme: dark;
@@ -256,6 +256,7 @@
     <label class="fileLabel" for="fileInput">Load 3D</label>
     <input id="fileInput" type="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.jpg,.jpeg,.png,.webp" />
     <button id="flipCamera">Flip</button>
+    <button id="mirrorCamera" aria-pressed="false" title="Mirror the live camera feed">Mirror</button>
     <select id="cameraSelect" aria-label="Camera lens" class="hidden"></select>
     <div class="spacer"></div>
     <button id="advancedToggle" aria-expanded="false">Controls</button>
@@ -305,7 +306,38 @@
         <input id="fovSlider" type="range" min="25" max="90" step="1" value="45" />
         <output id="fovReadout">45°</output>
       </div>
-      <p class="hint">Use 3D Perspective to visually match the virtual object's perspective to the selected phone lens. It is not automatic calibration.</p>
+      <p class="hint">Use Mirror in the top bar for a selfie-style camera feed. Mirroring is baked into photos and recordings. Use 3D Perspective to visually match the virtual object's perspective to the selected phone lens; it is not automatic calibration.</p>
+    </div>
+
+    <div class="section">
+      <h3>Recording</h3>
+      <div class="controlRow">
+        <label for="recordingQuality">Quality</label>
+        <select id="recordingQuality" aria-label="Recording quality">
+          <option value="540">Economy 540p</option>
+          <option value="720">Smooth 720p</option>
+          <option value="1080" selected>1080p</option>
+        </select>
+        <output id="recordingQualityReadout">1080p</output>
+      </div>
+      <div class="controlRow">
+        <label for="recordingFps">Frame rate</label>
+        <select id="recordingFps" aria-label="Recording frame rate">
+          <option value="30" selected>30 fps</option>
+        </select>
+        <output id="recordingFpsReadout">30 fps</output>
+      </div>
+      <div class="controlRow">
+        <label>Live render</label>
+        <span></span>
+        <output id="renderFpsReadout">— fps</output>
+      </div>
+      <div class="controlRow">
+        <label>Camera input</label>
+        <span></span>
+        <output id="cameraFpsReadout">— fps</output>
+      </div>
+      <p class="hint">1080p / 30 fps is the default. Frame-rate choices are populated from the selected camera’s browser-reported capabilities (up to 60 fps). Some phones cannot combine every frame rate with 1080p, so the camera may fall back to a lower actual rate. Use 720p or 540p for dense scans or slower phones.</p>
     </div>
 
     <div class="section">
@@ -419,6 +451,7 @@ const startCard = document.getElementById('startCard');
 const statusEl = document.getElementById('status');
 const fileInput = document.getElementById('fileInput');
 const flipCameraBtn = document.getElementById('flipCamera');
+const mirrorCameraBtn = document.getElementById('mirrorCamera');
 const cameraSelect = document.getElementById('cameraSelect');
 const advancedCameraSelect = document.getElementById('advancedCameraSelect');
 const advancedPanel = document.getElementById('advancedPanel');
@@ -445,6 +478,12 @@ const cameraZoom = document.getElementById('cameraZoom');
 const cameraZoomReadout = document.getElementById('cameraZoomReadout');
 const fovSlider = document.getElementById('fovSlider');
 const fovReadout = document.getElementById('fovReadout');
+const recordingQuality = document.getElementById('recordingQuality');
+const recordingQualityReadout = document.getElementById('recordingQualityReadout');
+const recordingFps = document.getElementById('recordingFps');
+const recordingFpsReadout = document.getElementById('recordingFpsReadout');
+const renderFpsReadout = document.getElementById('renderFpsReadout');
+const cameraFpsReadout = document.getElementById('cameraFpsReadout');
 const lightIntensity = document.getElementById('lightIntensity');
 const lightIntensityReadout = document.getElementById('lightIntensityReadout');
 const lightColor = document.getElementById('lightColor');
@@ -468,6 +507,7 @@ const groundTiltReadout = document.getElementById('groundTiltReadout');
 // State
 // -----------------------------------------------------------------------------
 let facingMode = 'environment';
+let cameraMirrored = false;
 let selectedDeviceId = '';
 let cameraStream = null;
 let videoTexture = null;
@@ -487,6 +527,16 @@ let resultKind = '';
 let wakeLock = null;
 let modelBaseBounds = null;
 let activeLoadToken = 0;
+let recordingPerformanceMode = false;
+let lastRecordingMeta = null;
+let lastRenderAt = 0;
+let fpsWindowStart = performance.now();
+let fpsFrameCount = 0;
+let modelTriangleCount = 0;
+let recordingRenderedFrames = 0;
+let recordingRenderStart = 0;
+let activeRecordingFps = 30;
+let lastCameraActualFps = 30;
 
 // -----------------------------------------------------------------------------
 // Three.js — one composited WebGL canvas for camera + 3D
@@ -499,7 +549,7 @@ const renderer = new THREE.WebGLRenderer({
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.setClearColor(0x050505, 1);
 renderer.autoClear = false;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = false;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 stage.appendChild(renderer.domElement);
 
@@ -520,7 +570,7 @@ scene.add(fillLight);
 const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
 keyLight.position.set(3, 4, 5);
 keyLight.castShadow = true;
-keyLight.shadow.mapSize.set(1024, 1024);
+keyLight.shadow.mapSize.set(512, 512);
 keyLight.shadow.camera.near = 0.1;
 keyLight.shadow.camera.far = 80;
 keyLight.shadow.camera.left = -20;
@@ -556,23 +606,145 @@ function renderComposite() {
   renderer.render(scene, camera3D);
 }
 
-function animate() {
-  requestAnimationFrame(animate);
-  renderComposite();
+const RECORDING_PRESETS = {
+  '540': { label: 'Economy 540p', shortLabel: '540p', maxSide: 960, idealWidth: 960, idealHeight: 540, videoBitrate: 2_800_000 },
+  '720': { label: 'Smooth 720p', shortLabel: '720p', maxSide: 1280, idealWidth: 1280, idealHeight: 720, videoBitrate: 4_500_000 },
+  '1080': { label: '1080p', shortLabel: '1080p', maxSide: 1920, idealWidth: 1920, idealHeight: 1080, videoBitrate: 7_500_000 }
+};
+
+const COMMON_RECORDING_FPS = [15, 24, 25, 30, 48, 50, 60];
+
+function getRecordingPreset() {
+  return RECORDING_PRESETS[recordingQuality?.value] || RECORDING_PRESETS['1080'];
 }
-animate();
+
+function getRequestedRecordingFps() {
+  const fps = Number(recordingFps?.value);
+  return Number.isFinite(fps) && fps > 0 ? fps : 30;
+}
+
+function getRecordingVideoBitrate(preset, fps) {
+  // Give higher frame rates more bitrate without doubling file size blindly.
+  const factor = THREE.MathUtils.clamp(fps / 30, 0.8, 1.7);
+  return Math.round(preset.videoBitrate * factor);
+}
+
+function updateRecordingQualityUI() {
+  const preset = getRecordingPreset();
+  const fps = getRequestedRecordingFps();
+  recordingQualityReadout.textContent = preset.shortLabel;
+  recordingFpsReadout.textContent = `${fps} fps`;
+}
+
+function populateRecordingFrameRates() {
+  const track = cameraStream?.getVideoTracks?.()[0];
+  const caps = track?.getCapabilities?.() || {};
+  const settings = track?.getSettings?.() || {};
+  const previous = getRequestedRecordingFps();
+  const current = Number(settings.frameRate);
+  const cap = caps.frameRate;
+
+  let rates = [];
+  if (cap && Number.isFinite(cap.min) && Number.isFinite(cap.max)) {
+    // rAF/canvas capture is not useful above 60 fps on most mobile browsers,
+    // so expose browser-reported camera rates only up to 60 fps.
+    rates = COMMON_RECORDING_FPS.filter(fps => fps >= cap.min - 0.5 && fps <= Math.min(cap.max, 60) + 0.5);
+  } else if (Number.isFinite(current) && current > 0) {
+    rates = COMMON_RECORDING_FPS.filter(fps => fps <= Math.min(current + 0.75, 60));
+  }
+
+  if (!rates.length) rates = [30];
+  if (Number.isFinite(current) && current > 0 && current <= 60) {
+    const roundedCurrent = Math.round(current);
+    if (!rates.some(fps => Math.abs(fps - roundedCurrent) <= 1)) rates.push(roundedCurrent);
+  }
+  rates = [...new Set(rates)].sort((a, b) => a - b);
+
+  recordingFps.innerHTML = '';
+  rates.forEach(fps => {
+    const option = document.createElement('option');
+    option.value = String(fps);
+    option.textContent = `${fps} fps`;
+    recordingFps.appendChild(option);
+  });
+
+  const preferred = rates.includes(previous) ? previous : (rates.includes(30) ? 30 : rates.reduce((best, fps) => Math.abs(fps - 30) < Math.abs(best - 30) ? fps : best, rates[0]));
+  recordingFps.value = String(preferred);
+  recordingFps.disabled = rates.length < 2 || document.body.classList.contains('recording');
+  updateRecordingQualityUI();
+}
+
+function updateCameraSettingsReadout() {
+  const track = cameraStream?.getVideoTracks?.()[0];
+  const settings = track?.getSettings?.() || {};
+  const reportedFps = Number(settings.frameRate);
+  lastCameraActualFps = Number.isFinite(reportedFps) && reportedFps > 0 ? reportedFps : lastCameraActualFps;
+  cameraFpsReadout.textContent = Number.isFinite(reportedFps) && reportedFps > 0 ? `${reportedFps.toFixed(reportedFps % 1 ? 1 : 0)} fps` : '— fps';
+  cameraFpsReadout.title = [settings.width, settings.height].every(Number.isFinite)
+    ? `${settings.width}×${settings.height}${Number.isFinite(reportedFps) ? ` @ ${reportedFps.toFixed(1)} fps` : ''}`
+    : '';
+}
+
+async function applyCameraCapturePreferences(showFallbackStatus = false) {
+  const track = cameraStream?.getVideoTracks?.()[0];
+  if (!track?.applyConstraints) return;
+  const preset = getRecordingPreset();
+  const requestedFps = getRequestedRecordingFps();
+  try {
+    await track.applyConstraints({
+      width: { ideal: preset.idealWidth },
+      height: { ideal: preset.idealHeight },
+      frameRate: { ideal: requestedFps }
+    });
+  } catch (err) {
+    console.warn('Camera could not apply requested recording preferences', err);
+  }
+  updateCameraSettingsReadout();
+  if (showFallbackStatus && lastCameraActualFps + 1 < requestedFps) {
+    setStatus(`This camera is currently providing about ${lastCameraActualFps.toFixed(0)} fps, so recording will use that rate instead of ${requestedFps} fps.`);
+  }
+}
+
+function noteRenderedFrame(now) {
+  fpsFrameCount += 1;
+  if (recordingPerformanceMode) recordingRenderedFrames += 1;
+  const elapsed = now - fpsWindowStart;
+  if (elapsed >= 1000) {
+    const fps = Math.round((fpsFrameCount * 1000) / elapsed);
+    renderFpsReadout.textContent = `${fps} fps`;
+    fpsFrameCount = 0;
+    fpsWindowStart = now;
+  }
+}
+
+function animate(now) {
+  requestAnimationFrame(animate);
+
+  // Preview is capped at 60 fps. During recording, render at the active
+  // recording cadence so canvas capture and the renderer stay in sync.
+  const targetFps = recordingPerformanceMode ? activeRecordingFps : 60;
+  const interval = 1000 / targetFps;
+  if (lastRenderAt && (now - lastRenderAt) < (interval - 1)) return;
+  lastRenderAt = now - ((now - lastRenderAt) % interval || 0);
+
+  renderComposite();
+  noteRenderedFrame(now);
+}
+requestAnimationFrame(animate);
 
 function resize() {
   const w = Math.max(1, window.innerWidth);
   const h = Math.max(1, window.innerHeight);
   let pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
 
-  // Cap the rendered recording dimension to keep mobile GPU/encoder load sane.
-  const maxOutputSide = 1920;
+  // Preview stays sharp, but recording deliberately renders fewer pixels on phones.
+  // This is much more important to perceived quality than attempting 1080p while
+  // dropping frames. The CSS canvas size never changes, only its internal buffer.
+  const maxOutputSide = recordingPerformanceMode ? getRecordingPreset().maxSide : 1600;
   const longest = Math.max(w, h) * pixelRatio;
   if (longest > maxOutputSide) pixelRatio *= maxOutputSide / longest;
 
-  renderer.setPixelRatio(pixelRatio);
+  renderer.setPixelRatio(Math.max(0.5, pixelRatio));
   renderer.setSize(w, h, false);
   camera3D.aspect = w / h;
   camera3D.updateProjectionMatrix();
@@ -580,6 +752,15 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 250));
+recordingQuality.addEventListener('change', async () => {
+  updateRecordingQualityUI();
+  if (cameraStream && !document.body.classList.contains('recording')) await applyCameraCapturePreferences(false);
+});
+recordingFps.addEventListener('change', async () => {
+  updateRecordingQualityUI();
+  if (cameraStream && !document.body.classList.contains('recording')) await applyCameraCapturePreferences(true);
+});
+updateRecordingQualityUI();
 resize();
 
 function updateVideoCrop() {
@@ -588,16 +769,32 @@ function updateVideoCrop() {
   const viewAspect = Math.max(1, window.innerWidth) / Math.max(1, window.innerHeight);
 
   // Center-crop the live camera so it fills the output canvas without stretching.
+  // Mirroring is applied at the texture level so it is included in stills and recordings.
+  let visibleX = 1;
+  let visibleY = 1;
   if (videoAspect > viewAspect) {
-    const visibleX = viewAspect / videoAspect;
-    videoTexture.repeat.set(visibleX, 1);
-    videoTexture.offset.set((1 - visibleX) / 2, 0);
+    visibleX = viewAspect / videoAspect;
   } else {
-    const visibleY = videoAspect / viewAspect;
-    videoTexture.repeat.set(1, visibleY);
-    videoTexture.offset.set(0, (1 - visibleY) / 2);
+    visibleY = videoAspect / viewAspect;
+  }
+
+  if (cameraMirrored) {
+    // Sample the same centered horizontal crop in reverse.
+    videoTexture.repeat.set(-visibleX, visibleY);
+    videoTexture.offset.set((1 + visibleX) / 2, (1 - visibleY) / 2);
+  } else {
+    videoTexture.repeat.set(visibleX, visibleY);
+    videoTexture.offset.set((1 - visibleX) / 2, (1 - visibleY) / 2);
   }
   videoTexture.needsUpdate = true;
+}
+
+function setCameraMirror(enabled) {
+  cameraMirrored = !!enabled;
+  mirrorCameraBtn.classList.toggle('active', cameraMirrored);
+  mirrorCameraBtn.setAttribute('aria-pressed', cameraMirrored ? 'true' : 'false');
+  mirrorCameraBtn.title = cameraMirrored ? 'Camera feed is mirrored' : 'Mirror the live camera feed';
+  updateVideoCrop();
 }
 
 // -----------------------------------------------------------------------------
@@ -619,10 +816,12 @@ function stopCameraStream() {
 }
 
 function buildVideoConstraints() {
+  const preset = getRecordingPreset();
+  const requestedFps = getRequestedRecordingFps();
   const constraints = {
-    width: { ideal: 1920 },
-    height: { ideal: 1080 },
-    frameRate: { ideal: 30, max: 60 }
+    width: { ideal: preset.idealWidth },
+    height: { ideal: preset.idealHeight },
+    frameRate: { ideal: requestedFps }
   };
   if (selectedDeviceId) constraints.deviceId = { exact: selectedDeviceId };
   else constraints.facingMode = { ideal: facingMode };
@@ -664,6 +863,8 @@ async function startCamera() {
     const settings = track?.getSettings?.() || {};
     selectedDeviceId = settings.deviceId || selectedDeviceId;
     facingMode = settings.facingMode || facingMode;
+    updateCameraSettingsReadout();
+    populateRecordingFrameRates();
 
     video.addEventListener('loadedmetadata', updateVideoCrop, { once: true });
     setTimeout(updateVideoCrop, 160);
@@ -746,6 +947,10 @@ flipCameraBtn.addEventListener('click', async () => {
   facingMode = facingMode === 'environment' ? 'user' : 'environment';
   await startCamera();
 });
+mirrorCameraBtn.addEventListener('click', () => {
+  if (document.body.classList.contains('recording')) return;
+  setCameraMirror(!cameraMirrored);
+});
 cameraSelect.addEventListener('change', () => selectCamera(cameraSelect.value));
 advancedCameraSelect.addEventListener('change', () => selectCamera(advancedCameraSelect.value));
 cameraZoom.addEventListener('input', applyCameraZoom);
@@ -782,6 +987,7 @@ function clearModel() {
   }
   currentModel = null;
   modelBaseBounds = null;
+  modelTriangleCount = 0;
 }
 
 function prepareMaterialsAndShadows(object, { sourceType = 'generic' } = {}) {
@@ -789,6 +995,7 @@ function prepareMaterialsAndShadows(object, { sourceType = 'generic' } = {}) {
   let meshCount = 0;
   let texturedMaterialCount = 0;
   let materialCount = 0;
+  let triangleCount = 0;
 
   object.traverse(node => {
     // Photogrammetry OBJ files can contain both polygon faces and OBJ `l` records.
@@ -801,6 +1008,9 @@ function prepareMaterialsAndShadows(object, { sourceType = 'generic' } = {}) {
     if (!node.isMesh) return;
 
     meshCount += 1;
+    const geometry = node.geometry;
+    if (geometry?.index) triangleCount += Math.floor(geometry.index.count / 3);
+    else if (geometry?.attributes?.position) triangleCount += Math.floor(geometry.attributes.position.count / 3);
     node.castShadow = true;
     node.receiveShadow = false;
     if (!node.material) return;
@@ -842,7 +1052,7 @@ function prepareMaterialsAndShadows(object, { sourceType = 'generic' } = {}) {
     lineObjects.forEach(node => node.parent?.remove(node));
   }
 
-  return { meshCount, lineCount: lineObjects.length, materialCount, texturedMaterialCount };
+  return { meshCount, lineCount: lineObjects.length, materialCount, texturedMaterialCount, triangleCount };
 }
 
 function fitAndInstallModel(object, options = {}) {
@@ -868,6 +1078,7 @@ function fitAndInstallModel(object, options = {}) {
 
   modelBaseBounds = new THREE.Box3().setFromObject(modelContent);
   currentModel = modelContent;
+  modelTriangleCount = stats.triangleCount || 0;
   resetModelTransform();
   applyOpacity(Number(opacityInput.value));
   snapGroundToModel();
@@ -877,6 +1088,9 @@ function fitAndInstallModel(object, options = {}) {
     message = 'OBJ surface loaded, but no diffuse texture is attached yet. Select the OBJ, MTL, and texture image file(s) together for the photographed material.';
   } else if (stats.lineCount > 0) {
     message = `Scan loaded with textured surface; ${stats.lineCount} line/point helper object${stats.lineCount === 1 ? '' : 's'} were removed.`;
+  }
+  if (modelTriangleCount > 750000) {
+    message += ` This is a dense scan (~${Math.round(modelTriangleCount / 1000)}k triangles); use 720p or Economy 540p for steadier recording.`;
   }
   setStatus(message);
 }
@@ -1303,6 +1517,10 @@ updateLighting();
 
 function updateShadow() {
   shadowCatcher.visible = shadowToggle.checked;
+  // Shadow rendering requires an additional render pass. Keep it completely off
+  // unless the catcher is visible; this is a large performance win on phones.
+  renderer.shadowMap.enabled = shadowToggle.checked;
+  if (shadowToggle.checked) renderer.shadowMap.needsUpdate = true;
   shadowControls.classList.toggle('hidden', !shadowToggle.checked);
   shadowMaterial.opacity = Number(shadowOpacity.value);
   shadowCatcher.position.y = Number(groundY.value);
@@ -1371,7 +1589,13 @@ function showResult(blob, file, kind) {
     recordedVideo.src = resultObjectURL;
     recordedVideo.load();
     downloadResult.textContent = 'Download WebM';
-    resultMeta.textContent = `WebM video · ${formatBytes(blob.size)}`;
+    const rec = lastRecordingMeta;
+    const renderFpsPart = rec?.actualRenderFps
+      ? ` · ${rec.actualRenderFps.toFixed(1)} fps rendered`
+      : '';
+    resultMeta.textContent = rec
+      ? `WebM video · ${rec.width}×${rec.height} · ${rec.targetFps} fps target${renderFpsPart} · ${formatBytes(blob.size)}`
+      : `WebM video · ${formatBytes(blob.size)}`;
   } else {
     recordedVideo.style.display = 'none';
     capturedImage.style.display = 'block';
@@ -1436,9 +1660,44 @@ async function startRecording() {
     return;
   }
 
-  const canvasStream = renderer.domElement.captureStream(30);
+  // Ask the physical camera for the selected resolution/frame-rate combination.
+  // Browser/device combinations may fall back when a requested combination is unavailable.
+  await applyCameraCapturePreferences(true);
+  const requestedFps = getRequestedRecordingFps();
+  activeRecordingFps = Math.max(1, Math.min(requestedFps, Number.isFinite(lastCameraActualFps) && lastCameraActualFps > 0 ? Math.round(lastCameraActualFps) : requestedFps, 60));
+
+  // Enter a lighter, fixed-resolution render mode before creating the capture track.
+  // The visible canvas stays the same size on screen; only its internal pixel buffer changes.
+  recordingPerformanceMode = true;
+  recordingQuality.disabled = true;
+  recordingFps.disabled = true;
+  lastRenderAt = 0; // start the recording cadence cleanly
+  resize();
+  renderComposite();
+
+  const preset = getRecordingPreset();
+  const videoBitrate = getRecordingVideoBitrate(preset, activeRecordingFps);
+  recordingRenderedFrames = 0;
+  recordingRenderStart = performance.now();
+
+  let canvasStream;
+  try {
+    canvasStream = renderer.domElement.captureStream(activeRecordingFps);
+  } catch (err) {
+    console.error('Canvas captureStream failed', err);
+    recordingPerformanceMode = false;
+    recordingQuality.disabled = false;
+    recordingFps.disabled = false;
+    resize();
+    setStatus('This browser could not start canvas recording. Try a current Safari or Chrome browser.');
+    return;
+  }
   recordingCanvasTrack = canvasStream.getVideoTracks()[0] || null;
   if (!recordingCanvasTrack) {
+    recordingPerformanceMode = false;
+    recordingQuality.disabled = false;
+    recordingFps.disabled = false;
+    resize();
     setStatus('Could not capture the rendered canvas on this browser.');
     return;
   }
@@ -1450,6 +1709,10 @@ async function startRecording() {
   if (!mimeType) {
     recordingCanvasTrack.stop?.();
     recordingCanvasTrack = null;
+    recordingPerformanceMode = false;
+    recordingQuality.disabled = false;
+    recordingFps.disabled = false;
+    resize();
     setStatus('This browser cannot create WebM recordings. Update Safari/iOS or use a current Chrome browser.');
     return;
   }
@@ -1461,13 +1724,17 @@ async function startRecording() {
   try {
     recorder = new MediaRecorder(recordingStream, {
       mimeType,
-      videoBitsPerSecond: 6_000_000,
+      videoBitsPerSecond: videoBitrate,
       audioBitsPerSecond: 128_000
     });
   } catch (err) {
     console.error(err);
     recordingCanvasTrack.stop?.();
     recordingCanvasTrack = null;
+    recordingPerformanceMode = false;
+    recordingQuality.disabled = false;
+    recordingFps.disabled = false;
+    resize();
     setStatus('Recording could not start with this browser/codec.');
     return;
   }
@@ -1477,9 +1744,18 @@ async function startRecording() {
   };
   recorder.onerror = event => {
     console.error('MediaRecorder error', event);
-    setStatus('The browser reported a recording error. Try a shorter clip or a smaller model.');
+    setStatus('The browser reported a recording error. Try Economy 540p, disable Ground Shadow, or use a smaller scan.');
   };
   recorder.onstop = finishRecording;
+
+  lastRecordingMeta = {
+    width: renderer.domElement.width,
+    height: renderer.domElement.height,
+    targetFps: activeRecordingFps,
+    requestedFps,
+    label: preset.label,
+    videoBitrate
+  };
 
   // No timeslice: short classroom takes produce one finalized WebM chunk on stop,
   // avoiding fragmented output that some players handle poorly.
@@ -1501,6 +1777,17 @@ function finishRecording() {
   clearInterval(timerInterval);
   timerInterval = null;
   document.body.classList.remove('recording');
+
+  const renderDuration = Math.max(1, performance.now() - recordingRenderStart);
+  if (lastRecordingMeta) {
+    lastRecordingMeta.actualRenderFps = (recordingRenderedFrames * 1000) / renderDuration;
+  }
+
+  recordingPerformanceMode = false;
+  recordingQuality.disabled = false;
+  lastRenderAt = 0; // return cleanly to the preview cadence
+  populateRecordingFrameRates();
+  resize();
 
   recordingCanvasTrack?.stop?.();
   recordingCanvasTrack = null;
